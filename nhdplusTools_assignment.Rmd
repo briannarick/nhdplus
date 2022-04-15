@@ -1,7 +1,7 @@
 ---
 title: "nhdplusTools"
-author: "Brandon Budnicki"
-date: "4/4/2022"
+author: "Bri Rick"
+date: "4/7/2022"
 output: html_document
 editor_options: 
   chunk_output_type: console
@@ -106,10 +106,10 @@ Let's say we're interested in identifying each gage's distance upstream of the N
 
 ```{r}
 flowlines_for_pathlengths <- get_tocomid(nofo_flowlines, add=TRUE) %>%
-  rename(ID=comid, toID=tocomid) # this function oddly uses a different naming convention than what's provided 
+  rename(ID=comid, toID=tocomid) # this function oddly uses a different naming convention than what's provided
                                  # in the NHD
 
-distances <- get_pathlength(flowlines_for_pathlengths) %>% # creates a table containing the distance between 
+distances <- get_pathlength(flowlines_for_pathlengths) %>% # creates a table containing the distance between
                                                            # each flowline and our network's outlet.
   rename(comid=ID,
          distance_km=pathlength)
@@ -214,6 +214,8 @@ nldi_nwis <- list(featureSource="nwissite", featureID=paste0("USGS-", passage_cr
 
 gage_basin <- get_nldi_basin(nldi_feature=nldi_nwis)
 
+st_area(gage_basin)
+
 mapview(passage_creek_flowlines) + mapview(gage_basin) + mapview(passage_creek)
 ```
 
@@ -224,14 +226,51 @@ mapview(passage_creek_flowlines) + mapview(gage_basin) + mapview(passage_creek)
 Say we are interested in identifying which gages monitor the NF directly (i.e., the mainstem), and which monitor tributaries. How might we be able to use a function in `nhdplusTools` to do this? Categorize each gage in the watershed as measuring along the mainstem or a tributary, **without** just using the station name to discern which is which. **HINT:** what does `get_UM()` do?
 
 ```{r}
+mainstem <- get_UM(network=nofo_flowlines, comid=8441253)%>%
+  as_tibble() %>%
+  rename(comid=value)
+  
+mainstem_gauges <- filter(gages, comid %in% c(mainstem$comid)) 
+notmain_gauges <- filter(gages, !comid %in% c(mainstem$comid)) 
 
+mapview(nofo_flowlines) + mapview(mainstem_gauges, color = "green") + mapview(notmain_gauges, color = "red")
 ```
 
 #### **Question 2a:**
 
 Find the distance between the "N F SHENANDOAH RIVER AT COOTES STORE, VA" and "N F SHENANDOAH RIVER NEAR STRASBURG, VA" gages using `get_pathlength()`. Then, map the flowlines between the two gages using `mapview()`.
 
+*I know this doesn't look like much, but I spent a ton of time trying many different things, and I ended up cheating (I think) to get an answer. I feel like there was a simple way that I just wasn't getting.*
+
 ```{r}
+#This is what we did previously to get the distances
+flowlines_for_pl <- get_tocomid(nofo_flowlines, add=TRUE) %>%
+  rename(ID=comid, toID=tocomid) 
+
+distances <- get_pathlength(flowlines_for_pl) %>% 
+  rename(comid=ID,
+         distance_km=pathlength)
+
+nofo_flowlines2 <- inner_join(distances, nofo_flowlines, by='comid') # join this table to our flowline features
+
+#mapview(nofo_flowlines, zcol='distance_km') + mapview(nofo_watershed, col.regions='white') + mapview(gages, col.regions='black')
+
+#Find the comids for the gages we're interested in 
+gagesNF <- gages %>% filter(station_nm %in% c("N F SHENANDOAH RIVER AT COOTES STORE, VA","N F SHENANDOAH RIVER NEAR STRASBURG, VA"))
+pathIDs <- gages %>% filter(station_nm %in% c("N F SHENANDOAH RIVER AT COOTES STORE, VA","N F SHENANDOAH RIVER NEAR STRASBURG, VA")) %>% select(comid) 
+
+start_comid <- 8441253
+to_comid <- 8441037
+
+#Select the comid's we're interested in
+dist_gages <- distances %>% filter(comid %in% pathIDs$comid)
+
+#Subtract the two distances to in theory get the distance bewteen the two gages
+total_dist <- dist_gages[2,2] - dist_gages[1,2]
+total_dist
+
+mapview(nofo_flowlines, zcol='distance_km') + mapview(nofo_watershed, col.regions='white') + mapview(gagesNF, col.regions='black')
+
 
 ```
 
@@ -240,13 +279,23 @@ Find the distance between the "N F SHENANDOAH RIVER AT COOTES STORE, VA" and "N 
 Now, find the distance between the "N F SHENANDOAH RIVER AT COOTES STORE, VA" and "N F SHENANDOAH RIVER NEAR STRASBURG, VA" gages using the suite of `get_UT()`, `get_DM()`, etc. functions. Like Question 2, map the flowlines between the two gages using `mapview()`. **HINT:** remember that flowlines have lots of geospatial information contained in the data table!
 
 ```{r}
+start_comid <- 8441253
+UM_comids <-get_UM(nofo_flowlines, start_comid) %>% 
+  as_tibble() %>% 
+  rename(comid=value)
 
+flows <- nofo_flowlines %>% filter(comid %in% c(UM_comids$comid))
+
+#infogages <- pathIDs %>% st_join(flows)
+
+mapview(flows) + mapview(pathIDs)
 ```
 
 #### **Question 2c:**
 
 Are the two distances from 2a and 2b the the same? If not, why do you think they might be different?
 
+*I obviously didn't do all of this correctly, but my guess is that it has to do that one way uses the exact location of the stream gage, whereas the other uses the associated flowline, so it might not be exact if the gage isn't exactly at the beginning of the flowline.*
 ```{r}
 
 ```
@@ -258,10 +307,93 @@ Select one of the following HUC-8s and develop a table of gages within the water
 Upper Oconnee River, GA (03070101); Concord River, MA (01070005); St. Vrain River, CO (10190005); or Crowley Lake, CA (18090102)
 
 ```{r}
+# Pull a polygon of the HUC-8 of interest
+sv_watershed <- get_huc8(id='10190005') # you can also pull a HUC-8 using a point or polygon feature 
+
+# Pull NHD features within our selected HUC-8 (i.e., our area of interest)
+sv_flowlines <- get_nhdplus(AOI = sv_watershed, 
+                         realization='flowline') # we want to pull the flowlines in our AOI
+
+sv_catchments <- get_nhdplus(AOI=sv_watershed, 
+                          realization='catchment') %>% # we want to pull the catchments in our AOI
+ filter(featureid %in% sv_flowlines$comid) 
+
+sv_waterbodies <- get_waterbodies(AOI=sv_watershed) 
+
+mapview(sv_catchments) + mapview(sv_flowlines) + mapview(sv_waterbodies)
+
+#Get the gages in the SV watershed
+sv_gages <- get_nwis(AOI=sv_watershed)
+
+sv_gages <- sv_gages %>%
+ filter(st_intersects(., sv_watershed, sparse = FALSE)) 
+
+mapview(sv_gages) + mapview(sv_flowlines) + mapview(sv_watershed)
+
+#Calculate distances
+sv_flowlines_for_pathlengths <- get_tocomid(sv_flowlines, add=TRUE) %>%
+  rename(ID=comid, toID=tocomid) # this function oddly uses a different naming convention than what's provided 
+                                 # in the NHD
+
+sv_distances <- get_pathlength(sv_flowlines_for_pathlengths) %>% # creates a table containing the distance between 
+                                                           # each flowline and our network's outlet.
+  rename(comid=ID,
+         distance_km=pathlength)
+
+sv_flowlines <- left_join(sv_flowlines, distances, by='comid') # join this table to our flowline features
+
+mapview(sv_flowlines, zcol='distance_km') + mapview(sv_watershed, col.regions='white') + mapview(sv_gages, col.regions='black')
+
+ for(i in 1:nrow(sv_gages)){
+   sv_gages$comid[i] <- discover_nhdplus_id(sv_gages[i,])} # for every gage (row, "i") in our dataset, create a comid 
+                                                    # column and fill it with that gage's comid
+
+sv_gages <- left_join(sv_gages,sv_distances,by='comid')
+
+#Grab stream order data from flowlines
+sv_order <- sv_flowlines %>%  select(c("comid", "streamorde"))
+
+#Add stream order to gages table
+sv_gages <- sv_gages %>% left_join(as.data.frame(sv_order), by = "comid")
 
 ```
 
-#### **Question 4:**
+##Trying to get watersheds and calculate their area...
+```{r}
+#I first tried to do the watersheds using get_nldi_basin, but that was a struggle, so decided to use the raindrop trace
 
-Peruse the list of functions in the `nhdplusTools` package index, and try to use one we haven't utilized yet within your watershed from Question 3.  
+#Create a function to delineate a watershed using trace
+watershed <- function(gage){
+    trace <- get_raindrop_trace(gage) # traces the NHDPlus digital elevation model to the nearest downslope 
+                                           # NHD flowline
+
+    snap_point <- sf::st_sfc(sf::st_point(trace$intersection_point[[1]][2:1]), crs=4326) 
+
+    better_termination <- get_split_catchment(snap_point, upstream=T)[2,]
+    
+    return (st_area(better_termination))
+}
+
+#I tried this for loop but it didn't work, so I gave up and just did it one by one
+# for (i in 1:nrow(sv_gages)){
+#       sv_gages$watershedArea[i] <- watershed(sv_gages[i,])
+# }
+
+sv_gages$watershedArea_m2[1] <- watershed(sv_gages[1,])
+sv_gages$watershedArea_m2[2] <- watershed(sv_gages[2,])
+#sv_gages$watershedArea_m2[3] <- watershed(sv_gages[3,])
+sv_gages$watershedArea_m2[4] <- watershed(sv_gages[4,])
+sv_gages$watershedArea_m2[5] <- watershed(sv_gages[5,])
+sv_gages$watershedArea_m2[6] <- watershed(sv_gages[6,])
+sv_gages$watershedArea_m2[7] <- watershed(sv_gages[7,])
+sv_gages$watershedArea_m2[8] <- watershed(sv_gages[8,])
+sv_gages$watershedArea_m2[9] <- watershed(sv_gages[9,])
+sv_gages$watershedArea_m2[10] <- watershed(sv_gages[10,])
+
+#And now we have a table with gages in the Saint Vrain watershed, their distances upstream of the HUC-8 outlet, the stream order they are located on, and their watershed area
+sv_gages %>% 
+    kable(.,'html',caption='Gage Information') %>%
+    kable_styling() %>%
+    scroll_box() # width='600px',height='500px'
+```
 
